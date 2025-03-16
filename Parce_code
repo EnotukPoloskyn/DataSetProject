@@ -1,0 +1,139 @@
+import requests
+import csv
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
+import time
+
+# Указываем путь к файлу
+csv_file_path = r"C:\Users\Пк\Desktop\auto.drom.csv"
+
+# Заголовки для имитации запроса от браузера
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Referer": "https://auto.drom.ru/",
+}
+
+
+# Функция для очистки и извлечения данных из таблицы
+def extract_characteristics(soup):
+    characteristics = {}
+    table_element = soup.find("table", {"class": "css-xalqz7 eo7fo180"})
+
+    if table_element:
+        for row in table_element.find_all("tr"):
+            key_element = row.find("th", {"class": "css-1dzcqnh eka0pcn1"})
+            value_element = row.find("td", {"class": "css-1azz3as eka0pcn0"})
+
+            if key_element and value_element:
+                key = key_element.text.strip()
+                # Убираем лишние переносы строк и невидимые символы
+                value = " ".join(value_element.stripped_strings).replace("\xa0", " ")
+                characteristics[key] = value
+
+    return characteristics
+
+
+# Функция для парсинга данных из объявления
+def parse_advertisement(ad_url, writer, fieldnames):
+    response = requests.get(ad_url, headers=headers)
+    if response.status_code == 200:
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        # Название
+        title_element = soup.find("span", {"class": "css-1kb7l9z e162wx9x0"})
+        title = title_element.text.strip() if title_element else "Нет данных"
+        if len(title) > 60:
+            title_element = soup.find("span", {"class": "css-j9fhi5 e162wx9x0"})
+            title = title_element.text.strip() if title_element else "Нет данных"
+
+        # Цена
+        price_element = soup.find("div", {"class": "wb9m8q0"})
+        price = price_element.text.strip() if price_element else "Нет данных"
+
+        # Характеристики (двигатель, пробег и т. д.)
+        characteristics = extract_characteristics(soup)
+
+        # Создание строки для CSV
+        row_data = {"Название": title, "Цена": price, "Ссылка": ad_url}
+
+        # Заполняем характеристики
+        for field in fieldnames:
+            if field not in row_data:  # Чтобы не перезаписывать "Название", "Цена", "Ссылка"
+                row_data[field] = characteristics.get(field, "Нет данных")
+
+        # Запись в CSV
+        writer.writerow(row_data)
+
+        # Вывод в консоль
+        print(f"Название: {title}")
+        print(f"Цена: {price}")
+        for key, value in characteristics.items():
+            print(f"{key}: {value}")
+        print(f"Ссылка: {ad_url}")
+        print("-" * 50)
+    else:
+        print(f"Ошибка при запросе объявления: {response.status_code}")
+
+
+# URL страницы с объявлениями
+base_url = "https://auto.drom.ru/region27/all"
+page_number = 1  # Начинаем с первой страницы
+csv_file_path = r"C:\Users\landy\Desktop\auto.drom.csv"
+
+# Полный список возможных характеристик
+fieldnames = ["Название", "Цена", "Двигатель", "Мощность", "Коробка передач", "Привод", "Цвет", "Пробег", "Владельцы",
+              "Руль", "Поколение", "Комплектация", "Ссылка"]
+
+# Открываем CSV-файл с кодировкой UTF-8-SIG
+with open(csv_file_path, mode="w", newline="", encoding="utf-8-sig") as file:
+    writer = csv.DictWriter(file, fieldnames=fieldnames)
+    writer.writeheader()  # Заголовки
+
+    ad_count = 0  # Переменная для отслеживания количества обработанных объявлений
+
+    # Пока не достигнут конец всех страниц
+    while True:
+        url = f"{base_url}/page{page_number}/" if page_number > 1 else base_url  # Для первой страницы не добавляем page
+
+        print(f"Парсинг страницы {url}...")
+
+        response = requests.get(url, headers=headers)
+
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, "html.parser")
+
+            # Получаем объявления на текущей странице
+            ad_containers = soup.find_all("a", {"class": ["g6gv8w4", "g6gv8w8", "_1ioeqy90"]})
+
+            # Пропускаем первые 2 ссылки
+            ad_containers = ad_containers[2:]
+
+            if not ad_containers:  # Если на странице нет объявлений, то выходим
+                print("Объявления на этой странице закончились.")
+                break
+
+            # Перебираем объявления на текущей странице
+            for i, container in enumerate(ad_containers):
+                if "href" in container.attrs:
+                    ad_url = urljoin("https://auto.drom.ru", container["href"])
+
+                    print(f"Парсинг объявления {ad_count + 1}: {ad_url}")
+                    parse_advertisement(ad_url, writer, fieldnames)
+
+                    # Увеличиваем количество обработанных объявлений
+                    ad_count += 1
+
+                    # Если обработано 20 объявлений, переходим на следующую страницу
+                    if ad_count % 20 == 0:
+                        print(f"Обработано 20 объявлений. Переходим на следующую страницу...")
+                        page_number += 1  # Увеличиваем номер страницы на 1
+                        break  # Прерываем цикл для перехода на следующую страницу
+
+        else:
+            print(f"Ошибка при запросе страницы: {response.status_code}")
+            break
+
+    print(f"\n✅ Данные сохранены в: {csv_file_path}")
+
